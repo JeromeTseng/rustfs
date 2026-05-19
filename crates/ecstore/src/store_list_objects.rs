@@ -1456,7 +1456,6 @@ mod test {
         let (result_tx, mut result_rx) = mpsc::channel(1);
 
         entry_tx.send(test_meta_entry("obj-a")).await.unwrap();
-        entry_tx.send(test_meta_entry("obj-b")).await.unwrap();
 
         let handle = tokio::spawn(gather_results(
             CancellationToken::new(),
