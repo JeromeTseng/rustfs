@@ -2303,9 +2303,9 @@ mod tests {
         assert!(opts.skip_decommissioned);
     }
 
-    // SAFETY: this helper is only used from `#[serial]` tests and those tests run under a
-    // single-thread runtime (`worker_threads = 1`), so no concurrent reader/writer can access
-    // process environment while `env::set_var`/`env::remove_var` is active.
+    // SAFETY: these helpers are only used by tests marked `#[serial]`, so no other test can
+    // concurrently mutate environment variables via this API. Tests also restore original
+    // environment values even when panicking.
     #[allow(unsafe_code)]
     fn with_transition_worker_env<F>(transition: Option<&str>, absolute: Option<&str>, test_fn: F)
     where
@@ -2355,9 +2355,9 @@ mod tests {
         }
     }
 
-    // SAFETY: this helper is only used from `#[serial]` tests and those tests run under a
-    // single-thread runtime (`worker_threads = 1`), so no concurrent reader/writer can access
-    // process environment while `env::set_var`/`env::remove_var` is active.
+    // SAFETY: these helpers are only used by tests marked `#[serial]`, so no other test can
+    // mutate environment variables concurrently. Tests also restore original environment values
+    // even when panicking.
     #[allow(unsafe_code)]
     async fn with_transition_worker_env_async<F, Fut>(transition: Option<&str>, absolute: Option<&str>, test_fn: F)
     where
@@ -2408,9 +2408,9 @@ mod tests {
         }
     }
 
-    // SAFETY: this helper is only used from `#[serial]` tests and those tests run under a
-    // single-thread runtime (`worker_threads = 1`), so no concurrent reader/writer can access
-    // process environment while `env::set_var`/`env::remove_var` is active.
+    // SAFETY: these helpers are only used by tests marked `#[serial]`, so only one caller can
+    // mutate environment variables via these helpers at a time. Tests also restore original
+    // environment values even when panicking.
     #[allow(unsafe_code)]
     fn with_transition_queue_env<F>(capacity: Option<&str>, timeout_ms: Option<&str>, test_fn: F)
     where
@@ -2460,9 +2460,9 @@ mod tests {
         }
     }
 
-    // SAFETY: this helper is only used from `#[serial]` tests and those tests run under a
-    // single-thread runtime (`worker_threads = 1`), so no concurrent reader/writer can access
-    // process environment while `env::set_var`/`env::remove_var` is active.
+    // SAFETY: these helpers are only used by tests marked `#[serial]`, so only one caller can
+    // mutate environment variables at a time. Tests also restore original environment values even
+    // when panicking.
     #[allow(unsafe_code)]
     async fn with_transition_queue_env_async<F, Fut>(capacity: Option<&str>, timeout_ms: Option<&str>, test_fn: F)
     where
@@ -2658,6 +2658,35 @@ mod tests {
         let current_workers = GLOBAL_TransitionState.num_workers.load(Ordering::SeqCst);
         if original_workers > 0 {
             TransitionState::update_workers(ecstore, original_workers).await;
+        } else {
+            for _ in 0..current_workers {
+                let _ = GLOBAL_TransitionState.kill_tx.send(()).await;
+                GLOBAL_TransitionState.num_workers.fetch_add(-1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transition_state_update_workers_inner_ignores_non_positive_absolute_max() {
+        let (_paths, ecstore) = setup_test_env().await;
+        let original_workers = GLOBAL_TransitionState.num_workers.load(Ordering::SeqCst);
+
+        with_transition_worker_env_async(Some("64"), Some("0"), || async {
+            TransitionState::update_workers_inner(ecstore.clone(), 64).await;
+            assert_eq!(GLOBAL_TransitionState.num_workers.load(Ordering::SeqCst), DEFAULT_TRANSITION_WORKERS_ABSOLUTE_MAX);
+        })
+        .await;
+
+        with_transition_worker_env_async(Some("64"), Some("-1"), || async {
+            TransitionState::update_workers_inner(ecstore.clone(), 64).await;
+            assert_eq!(GLOBAL_TransitionState.num_workers.load(Ordering::SeqCst), DEFAULT_TRANSITION_WORKERS_ABSOLUTE_MAX);
+        })
+        .await;
+
+        let current_workers = GLOBAL_TransitionState.num_workers.load(Ordering::SeqCst);
+        if original_workers > 0 {
+            TransitionState::update_workers(ecstore.clone(), original_workers).await;
         } else {
             for _ in 0..current_workers {
                 let _ = GLOBAL_TransitionState.kill_tx.send(()).await;
