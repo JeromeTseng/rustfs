@@ -480,6 +480,10 @@ pub async fn list_path_raw(rx: CancellationToken, opts: ListPathRawOptions) -> d
     });
 
     if let Err(err) = revjob.await.map_err(std::io::Error::other)? {
+        if err == DiskError::other("canceled") {
+            return Ok(());
+        }
+
         error!("list_path_raw: revjob err {:?}", err);
         cancel_rx.cancel();
 
@@ -551,6 +555,24 @@ mod tests {
         .expect_err("stalled reader should make listing fail explicitly");
 
         assert_eq!(err, DiskError::Timeout);
+    }
+
+    #[tokio::test]
+    async fn list_path_raw_returns_ok_when_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let err = list_path_raw(
+            cancel,
+            ListPathRawOptions {
+                disks: vec![None],
+                min_disks: 1,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(err, Ok(()));
     }
 
     #[tokio::test]
