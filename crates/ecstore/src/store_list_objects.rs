@@ -1328,6 +1328,8 @@ impl SetDisks {
 
         let tx1 = sender.clone();
         let tx2 = sender.clone();
+        let cancel_for_send1 = rx.clone();
+        let cancel_for_send2 = rx.clone();
 
         list_path_raw(
             rx,
@@ -1344,9 +1346,12 @@ impl SetDisks {
                 agreed: Some(Box::new(move |entry: MetaCacheEntry| {
                     Box::pin({
                         let value = tx1.clone();
+                        let cancel_token = cancel_for_send1.clone();
                         async move {
                             if let Err(err) = value.send(entry).await {
-                                error!("list_path send fail {:?}", err);
+                                if !cancel_token.is_cancelled() {
+                                    error!("list_path send fail {:?}", err);
+                                }
                             }
                         }
                     })
@@ -1355,11 +1360,14 @@ impl SetDisks {
                     Box::pin({
                         let value = tx2.clone();
                         let resolver = resolver.clone();
+                        let cancel_token = cancel_for_send2.clone();
                         async move {
                             if let Some(entry) = entries.resolve(resolver)
                                 && let Err(err) = value.send(entry).await
                             {
-                                error!("list_path send fail {:?}", err);
+                                if !cancel_token.is_cancelled() {
+                                    error!("list_path send fail {:?}", err);
+                                }
                             }
                         }
                     })
