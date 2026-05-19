@@ -826,6 +826,8 @@ impl ECStore {
 
                     let tx1 = sender.clone();
                     let tx2 = sender.clone();
+                    let cancel_token = rx_clone.clone();
+                    let cancel_token2 = cancel_token.clone();
 
                     list_path_raw(
                         rx_clone,
@@ -842,11 +844,14 @@ impl ECStore {
                             agreed: Some(Box::new(move |entry: MetaCacheEntry| {
                                 Box::pin({
                                     let value = tx1.clone();
+                                    let cancel_for_send = cancel_token.clone();
                                     async move {
                                         if entry.is_dir() {
                                             return;
                                         }
-                                        if let Err(err) = value.send(entry).await {
+                                        if let Err(err) = value.send(entry).await
+                                            && !cancel_for_send.is_cancelled()
+                                        {
                                             error!("list_path send fail {:?}", err);
                                         }
                                     }
@@ -856,9 +861,11 @@ impl ECStore {
                                 Box::pin({
                                     let value = tx2.clone();
                                     let resolver = resolver.clone();
+                                    let cancel_for_send = cancel_token2.clone();
                                     async move {
                                         if let Some(entry) = entries.resolve(resolver)
                                             && let Err(err) = value.send(entry).await
+                                            && !cancel_for_send.is_cancelled()
                                         {
                                             error!("list_path send fail {:?}", err);
                                         }
@@ -1063,8 +1070,6 @@ async fn gather_results(
         entries.push(Some(entry));
 
         if opts.limit > 0 && entries.len() >= opts.limit as usize {
-            rx.cancel();
-
             results_tx
                 .send(MetaCacheEntriesSortedResult {
                     entries: Some(MetaCacheEntriesSorted {
@@ -1075,6 +1080,7 @@ async fn gather_results(
                 })
                 .await
                 .map_err(Error::other)?;
+            rx.cancel();
             return Ok(());
         }
     }
